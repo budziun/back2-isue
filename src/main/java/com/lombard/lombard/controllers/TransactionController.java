@@ -130,13 +130,13 @@ public class TransactionController {
     }
     // delete transaction id
     @DeleteMapping("/transactions/{id}")
-    public ResponseEntity<Void> deleteTransaction(@PathVariable Integer id) {
-        if (transactionRepository.existsById(id)) {
-            transactionRepository.deleteById(id);
-            return ResponseEntity.noContent().build();
-        } else {
-            return ResponseEntity.notFound().build();
-        }
+    public ResponseEntity<Map<String, Boolean>> deleteTransaction(@PathVariable Integer id) {
+        boolean deleted = transactionService.deleteTransaction(id);
+
+        Map<String, Boolean> response = new HashMap<>();
+        response.put("deleted", deleted);
+
+        return deleted ? ResponseEntity.ok(response) : ResponseEntity.notFound().build();
     }
     @Autowired
     private TransactionRepository transactionRepository;
@@ -170,6 +170,34 @@ public class TransactionController {
         return handleTransactionResponse(response);
     }
 
+    @DeleteMapping("/transactions/{id}/cascade")
+    public ResponseEntity<Map<String, Boolean>> deleteTransactionCascade(@PathVariable Integer id) {
+        boolean deleted = transactionService.deleteTransactionCascade(id);
+
+        Map<String, Boolean> response = new HashMap<>();
+        response.put("deleted", deleted);
+
+        return deleted ? ResponseEntity.ok(response) : ResponseEntity.notFound().build();
+    }
+
+    @PatchMapping("/transactions/{id}/type")
+    public ResponseEntity<?> updateTransactionType(
+            @PathVariable Integer id,
+            @RequestBody Map<String, String> requestBody) {
+
+        Employee employee = getCurrentEmployee();
+        if (employee == null) {
+            Map<String, String> errorResponse = new HashMap<>();
+            errorResponse.put("error", "Unauthorized");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
+        }
+
+        String newType = requestBody.get("newType");
+        String notes = requestBody.get("notes");
+
+        TransactionResponse response = transactionService.updateTransactionType(id, newType, notes, employee);
+        return handleTransactionResponse(response);
+    }
 
     private Employee getCurrentEmployee() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();

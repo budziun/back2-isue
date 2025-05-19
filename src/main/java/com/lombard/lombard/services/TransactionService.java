@@ -15,6 +15,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 public class TransactionService {
@@ -295,6 +296,106 @@ public class TransactionService {
             return new TransactionResponse(savedTransaction, null);
         } catch (Exception e) {
             return new TransactionResponse(null, e.getMessage());
+        }
+    }
+    @Transactional
+    public TransactionResponse updateTransactionType(Integer id, String newType, String notes, Employee employee) {
+        try {
+            Optional<Transaction> transactionOpt = transactionRepository.findById(id);
+            if (transactionOpt.isEmpty()) {
+                return new TransactionResponse(null, "Transaction not found");
+            }
+
+            Transaction transaction = transactionOpt.get();
+
+            // Konwersja do małych liter aby dopasować do enuma
+            String normalizedType = newType.toLowerCase();
+
+            // Sprawdzenie, czy zmiana typu transakcji jest dozwolona
+            if (transaction.getTransactionType() == TransactionType.pawn &&
+                TransactionType.valueOf(normalizedType) == TransactionType.redemption) {
+
+                // Aktualizacja typu transakcji i notatek
+                transaction.setTransactionType(TransactionType.redemption);
+                if (notes != null) {
+                    transaction.setNotes(notes);
+                }
+
+                // Aktualizacja statusu przedmiotów
+                for (TransactionItem ti : transactionItemRepository.findByTransaction(transaction)) {
+                    Item item = ti.getItem();
+                    if (item.getStatus() == ItemStatus.pawned) {
+                        item.setStatus(ItemStatus.redeemed);
+                        item.setUpdatedBy(employee);
+                        itemRepository.save(item);
+                    }
+                }
+
+                // Zapisanie zaktualizowanej transakcji
+                Transaction updatedTransaction = transactionRepository.save(transaction);
+                return new TransactionResponse(updatedTransaction, null);
+            } else {
+                return new TransactionResponse(null, "Unsupported transaction type change");
+            }
+        } catch (Exception e) {
+            return new TransactionResponse(null, e.getMessage());
+        }
+    }
+
+    @Transactional
+    public boolean deleteTransaction(Integer id) {
+        try {
+            Optional<Transaction> transactionOpt = transactionRepository.findById(id);
+            if (transactionOpt.isEmpty()) {
+                return false;
+            }
+
+            // Remove references from related transactions
+            transactionRepository.clearRelatedTransactionReferences(id);
+
+            // Delete transaction items
+            transactionItemRepository.deleteByTransaction(transactionOpt.get());
+
+            // Delete the transaction
+            transactionRepository.deleteById(id);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Transactional
+    public boolean deleteTransactionCascade(Integer id) {
+        try {
+            Optional<Transaction> transactionOpt = transactionRepository.findById(id);
+            if (transactionOpt.isEmpty()) {
+                return false;
+            }
+
+            Transaction transaction = transactionOpt.get();
+
+            // Find any transactions that reference this one
+            List<Transaction> relatedTransactions = transactionRepository.findAll().stream()
+                    .filter(t -> t.getRelatedTransaction() != null &&
+                           t.getRelatedTransaction().getId().equals(transaction.getId()))
+                    .collect(Collectors.toList());
+
+            // For each related transaction, set relatedTransaction to null
+            for (Transaction related : relatedTransactions) {
+                related.setRelatedTransaction(null);
+                transactionRepository.save(related);
+            }
+
+            // Delete transaction items
+            List<TransactionItem> items = transactionItemRepository.findByTransaction(transaction);
+            transactionItemRepository.deleteAll(items);
+
+            // Delete the transaction
+            transactionRepository.delete(transaction);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
         }
     }
 

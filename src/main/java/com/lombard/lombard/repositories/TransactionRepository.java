@@ -4,7 +4,9 @@ import com.lombard.lombard.models.Customer;
 import com.lombard.lombard.models.Transaction;
 import com.lombard.lombard.models.Transaction.TransactionType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
@@ -34,4 +36,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, Intege
     // NOWY ENDPOINT: transakcje zawierające itemy z danej kategorii
     @Query("SELECT DISTINCT t FROM Transaction t JOIN t.transactionItems i WHERE i.item.category.id = :categoryId")
     List<Transaction> findByItemCategoryId(Integer categoryId);
+
+    @Modifying
+    @Query("UPDATE Transaction t SET t.relatedTransaction = null WHERE t.relatedTransaction.id = :id")
+    void clearRelatedTransactionReferences(@Param("id") Integer id);
 }
