@@ -1,12 +1,12 @@
 package com.lombard.lombard.controllers;
 
-import com.lombard.lombard.repositories.TransactionRepository;
 import com.lombard.lombard.dto.transaction.*;
 import com.lombard.lombard.models.Customer;
 import com.lombard.lombard.models.Employee;
 import com.lombard.lombard.models.Transaction;
 import com.lombard.lombard.models.Transaction.TransactionType;
 import com.lombard.lombard.repositories.EmployeeRepository;
+import com.lombard.lombard.repositories.TransactionRepository;
 import com.lombard.lombard.security.JwtTokenUtil;
 import com.lombard.lombard.services.CustomerService;
 import com.lombard.lombard.services.TransactionService;
@@ -19,8 +19,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
@@ -35,6 +37,8 @@ public class TransactionController {
     private final CustomerService customerService;
     private final EmployeeRepository employeeRepository;
     private final Mapper mapper;
+    private final TransactionRepository transactionRepository;
+    private final JwtTokenUtil jwtTokenUtil;
 
     @Autowired
     public TransactionController(
@@ -42,11 +46,31 @@ public class TransactionController {
             CustomerService customerService,
             EmployeeRepository employeeRepository,
             JwtTokenUtil jwtTokenUtil,
+            TransactionRepository transactionRepository,
             Mapper mapper) {
         this.transactionService = transactionService;
         this.customerService = customerService;
         this.employeeRepository = employeeRepository;
+        this.transactionRepository = transactionRepository;
+        this.jwtTokenUtil = jwtTokenUtil;
         this.mapper = mapper;
+    }
+
+    /**
+     * Get the currently authenticated employee
+     * @return The current employee or null if not authenticated
+     */
+    private Employee getCurrentEmployee() {
+        try {
+            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+            if (authentication != null && authentication.getPrincipal() instanceof UserDetails) {
+                UserDetails userDetails = (UserDetails) authentication.getPrincipal();
+                return employeeRepository.findByLogin(userDetails.getUsername()).orElse(null);
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // get Transactions
@@ -128,6 +152,7 @@ public class TransactionController {
 
         return handleTransactionResponse(response);
     }
+
     // delete transaction id
     @DeleteMapping("/transactions/{id}")
     public ResponseEntity<Map<String, Boolean>> deleteTransaction(@PathVariable Integer id) {
@@ -138,8 +163,7 @@ public class TransactionController {
 
         return deleted ? ResponseEntity.ok(response) : ResponseEntity.notFound().build();
     }
-    @Autowired
-    private TransactionRepository transactionRepository;
+
     // pawn transaction
     @PostMapping("/transactions/pawn")
     public ResponseEntity<?> createPawnTransaction(@RequestBody CreatePawnDTO pawnDTO) {
@@ -183,29 +207,59 @@ public class TransactionController {
     @PatchMapping("/transactions/{id}/type")
     public ResponseEntity<?> updateTransactionType(
             @PathVariable Integer id,
-            @RequestBody Map<String, String> requestBody) {
+            @RequestBody Map<String, Object> requestBody) {
 
-        Employee employee = getCurrentEmployee();
-        if (employee == null) {
+        Employee currentEmployee = getCurrentEmployee();
+        if (currentEmployee == null) {
             Map<String, String> errorResponse = new HashMap<>();
             errorResponse.put("error", "Unauthorized");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(errorResponse);
         }
 
-        String newType = requestBody.get("newType");
-        String notes = requestBody.get("notes");
+        String newType = (String) requestBody.get("newType");
+        String notes = (String) requestBody.get("notes");
 
-        TransactionResponse response = transactionService.updateTransactionType(id, newType, notes, employee);
-        return handleTransactionResponse(response);
-    }
-
-    private Employee getCurrentEmployee() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication != null && authentication.isAuthenticated()) {
-            String username = authentication.getName();
-            return employeeRepository.findByLogin(username).orElse(null);
+        // Odczytanie ceny końcowej, jeśli istnieje
+        BigDecimal finalPrice = null;
+        if (requestBody.containsKey("finalPrice")) {
+            try {
+                Object finalPriceObj = requestBody.get("finalPrice");
+                if (finalPriceObj instanceof Number) {
+                    finalPrice = BigDecimal.valueOf(((Number) finalPriceObj).doubleValue());
+                } else if (finalPriceObj instanceof String) {
+                    finalPrice = new BigDecimal((String) finalPriceObj);
+                }
+            } catch (Exception e) {
+                // Ignoruj błędy konwersji
+            }
         }
-        return null;
+
+        // Odczytanie ID pracownika, jeśli istnieje
+        Integer employeeId = null;
+        if (requestBody.containsKey("employeeId")) {
+            try {
+                Object empIdObj = requestBody.get("employeeId");
+                if (empIdObj instanceof Number) {
+                    employeeId = ((Number) empIdObj).intValue();
+                } else if (empIdObj instanceof String) {
+                    employeeId = Integer.parseInt((String) empIdObj);
+                }
+            } catch (Exception e) {
+                // Ignoruj błędy konwersji
+            }
+        }
+
+        // Znajdź pracownika na podstawie ID, lub użyj bieżącego pracownika
+        Employee saleEmployee = currentEmployee;
+        if (employeeId != null) {
+            Optional<Employee> employeeOpt = employeeRepository.findById(employeeId);
+            if (employeeOpt.isPresent()) {
+                saleEmployee = employeeOpt.get();
+            }
+        }
+
+        TransactionResponse response = transactionService.updateTransactionType(id, newType, notes, finalPrice, saleEmployee);
+        return handleTransactionResponse(response);
     }
 
     private ResponseEntity<?> handleTransactionResponse(TransactionResponse response){

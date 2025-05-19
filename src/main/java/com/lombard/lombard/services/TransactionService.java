@@ -298,8 +298,9 @@ public class TransactionService {
             return new TransactionResponse(null, e.getMessage());
         }
     }
+
     @Transactional
-    public TransactionResponse updateTransactionType(Integer id, String newType, String notes, Employee employee) {
+    public TransactionResponse updateTransactionType(Integer id, String newType, String notes, BigDecimal finalPrice, Employee employee) {
         try {
             Optional<Transaction> transactionOpt = transactionRepository.findById(id);
             if (transactionOpt.isEmpty()) {
@@ -307,21 +308,63 @@ public class TransactionService {
             }
 
             Transaction transaction = transactionOpt.get();
-
-            // Konwersja do małych liter aby dopasować do enuma
             String normalizedType = newType.toLowerCase();
+            TransactionType targetType;
 
-            // Sprawdzenie, czy zmiana typu transakcji jest dozwolona
-            if (transaction.getTransactionType() == TransactionType.pawn &&
-                TransactionType.valueOf(normalizedType) == TransactionType.redemption) {
+            try {
+                targetType = TransactionType.valueOf(normalizedType);
+            } catch (IllegalArgumentException e) {
+                return new TransactionResponse(null, "Invalid transaction type");
+            }
+
+            // Obsługa zmiany typu z purchase na sale
+            if (transaction.getTransactionType() == TransactionType.purchase &&
+                targetType == TransactionType.sale) {
 
                 // Aktualizacja typu transakcji i notatek
+                transaction.setTransactionType(targetType);
+                if (notes != null) {
+                    transaction.setNotes(notes);
+                }
+
+                // Aktualizacja daty transakcji na dzisiejszą datę
+                transaction.setTransactionDate(LocalDate.now());
+
+                // Aktualizacja kwoty, jeśli podano cenę sprzedaży
+                if (finalPrice != null) {
+                    transaction.setTotalAmount(finalPrice);
+                }
+
+                // Aktualizacja pracownika sprzedającego
+                transaction.setEmployee(employee);
+
+                // Aktualizacja statusu przedmiotów
+                for (TransactionItem ti : transactionItemRepository.findByTransaction(transaction)) {
+                    Item item = ti.getItem();
+                    if (item.getStatus() == ItemStatus.in_inventory) {
+                        item.setStatus(ItemStatus.sold);
+                        item.setUpdatedBy(employee);
+                        itemRepository.save(item);
+                    }
+                }
+
+                // Zapisanie zaktualizowanej transakcji
+                Transaction updatedTransaction = transactionRepository.save(transaction);
+                return new TransactionResponse(updatedTransaction, null);
+            }
+            // Obsługa zmiany typu z pawn na redemption (istniejący kod)
+            else if (transaction.getTransactionType() == TransactionType.pawn &&
+                     targetType == TransactionType.redemption) {
+
+                // Istniejący kod dla obsługi odkupienia zastawu...
                 transaction.setTransactionType(TransactionType.redemption);
                 if (notes != null) {
                     transaction.setNotes(notes);
                 }
 
-                // Aktualizacja statusu przedmiotów
+                // Aktualizacja daty transakcji na dzisiejszą datę dla odkupień
+                transaction.setTransactionDate(LocalDate.now());
+
                 for (TransactionItem ti : transactionItemRepository.findByTransaction(transaction)) {
                     Item item = ti.getItem();
                     if (item.getStatus() == ItemStatus.pawned) {
@@ -331,7 +374,6 @@ public class TransactionService {
                     }
                 }
 
-                // Zapisanie zaktualizowanej transakcji
                 Transaction updatedTransaction = transactionRepository.save(transaction);
                 return new TransactionResponse(updatedTransaction, null);
             } else {
@@ -482,10 +524,10 @@ public class TransactionService {
         return null;
     }
 
-        public record TransactionResponse(Transaction transaction, String errorMessage) {
+    public record TransactionResponse(Transaction transaction, String errorMessage) {
 
-        public boolean isSuccess() {
-                return transaction != null;
-            }
+    public boolean isSuccess() {
+            return transaction != null;
         }
+    }
 }
